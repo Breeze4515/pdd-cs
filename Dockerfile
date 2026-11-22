@@ -13,8 +13,16 @@ ENV PYTHONUNBUFFERED=1 \
     PDD_CS_HOST=0.0.0.0 \
     PDD_CS_PORT=38617
 
+# 安装 Chromium 及其无头运行依赖：让容器内「服务器扫码登录」（页面显示二维码、手机扫）可用。
+# 面板 capability() 会通过 find_chrome() 找到 /usr/bin/chromium，从而 qr_login=True。
+# 注意：Chromium/Chrome 在无 DISPLAY 容器里走 headless（--headless=new --no-sandbox），
+# 无需 Xvfb/VNC；若 Debian 源无 chromium，可改用 dl.google.com 的 google-chrome-stable_current_amd64.deb。
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends tzdata ca-certificates \
+    && apt-get install -y --no-install-recommends \
+        tzdata ca-certificates fonts-liberation \
+        libnss3 libatk-bridge2.0-0 libgtk-3-0 libgbm1 libasound2 \
+        libxss1 libxdamage1 libxrandr2 libxcomposite1 libxfixes3 libxkbcommon0 \
+        chromium \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
