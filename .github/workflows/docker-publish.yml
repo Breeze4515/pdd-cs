@@ -1,107 +1,424 @@
 
+# ============================================================
+# PDD-CS - GitHub Actions 自动测试与 Docker 镜像构建发布
+# ============================================================
+#
+# 项目：
+#   https://github.com/Breeze4515/pdd-cs
+#
+# Docker 镜像：
+#   ghcr.io/breeze4515/pdd-cs:latest
+#
+# 支持架构：
+#   linux/amd64
+#   linux/arm64
+#
+# 自动化流程：
+#   1. 检出 GitHub 仓库源码
+#   2. 安装 Python 3.12 环境
+#   3. 安装 Python 项目依赖
+#   4. 执行 Python 自动化测试
+#   5. 安装 Node.js 22 环境
+#   6. 执行浏览器扩展测试
+#   7. 检查浏览器扩展打包完整性
+#   8. 检查项目发布安全性
+#   9. 配置 Docker Buildx
+#  10. 生成 Docker 镜像标签
+#  11. 登录 GitHub Container Registry
+#  12. 构建并推送多架构 Docker 镜像
+#
+# 重要：
+#   Python 测试未通过时，不会执行 Docker 发布任务。
+#   Pull Request 只执行测试和镜像构建，不推送镜像。
+#
+# ============================================================
+
+
+# ============================================================
+# 工作流名称
+# ============================================================
+
 name: Build and Publish Docker Image
 
+
+# ============================================================
+# 触发条件
+# ============================================================
+
 on:
+
+  # 推送到 main 分支时触发
   push:
     branches:
       - main
+
+    # 推送版本标签时触发
     tags:
       - "v*"
+
+  # Pull Request 时触发
   pull_request:
+
+  # 允许在 GitHub Actions 页面手动运行
   workflow_dispatch:
 
-# 避免同一分支重复构建
+
+# ============================================================
+# 并发控制
+# ============================================================
+#
+# 避免同一分支或标签重复执行构建任务。
+#
+# cancel-in-progress:
+#   true 表示取消同一并发组中正在运行的旧任务。
+#
+# ============================================================
+
 concurrency:
   group: docker-${{ github.ref }}
   cancel-in-progress: true
 
+
+# ============================================================
+# 工作流默认权限
+# ============================================================
+
 permissions:
   contents: read
 
+
+# ============================================================
+# Jobs：自动化任务
+# ============================================================
+
 jobs:
+
+
+  # ==========================================================
+  # Job 1：自动化测试
+  # ==========================================================
+  #
+  # 负责验证项目代码、浏览器扩展和发布安全性。
+  #
+  # 只有此任务全部成功，才允许执行 Docker 镜像发布。
+  #
+  # ==========================================================
+
   test:
+
     name: Run Tests
+
     runs-on: ubuntu-latest
 
+    # --------------------------------------------------------
+    # 环境变量
+    # --------------------------------------------------------
+    #
+    # 排除 localhost 代理。
+    #
+    # 避免本地 Webhook 测试请求经过 HTTP/HTTPS 代理。
+    #
+    # --------------------------------------------------------
+
+    env:
+      NO_PROXY: "127.0.0.1,localhost,::1"
+      no_proxy: "127.0.0.1,localhost,::1"
+
     steps:
-      - name: Checkout
+
+
+      # ------------------------------------------------------
+      # 1. 检出源码
+      # ------------------------------------------------------
+
+      - name: Checkout Repository
+
         uses: actions/checkout@v4
 
+
+      # ------------------------------------------------------
+      # 2. 安装 Python 3.12
+      # ------------------------------------------------------
+
       - name: Setup Python
+
         uses: actions/setup-python@v5
+
         with:
           python-version: "3.12"
+
+          # 启用 pip 缓存
           cache: pip
 
-      - name: Install dependencies
+
+      # ------------------------------------------------------
+      # 3. 安装 Python 项目依赖
+      # ------------------------------------------------------
+
+      - name: Install Python Dependencies
+
         run: |
           python -m pip install --upgrade pip
+
           pip install -r requirements.txt
 
-      - name: Run Python tests
+
+      # ------------------------------------------------------
+      # 4. 执行 Python 自动化测试
+      # ------------------------------------------------------
+      #
+      # -v：
+      #   显示详细测试名称。
+      #
+      # --tb=short：
+      #   显示简短错误堆栈。
+      #
+      # ------------------------------------------------------
+
+      - name: Run Python Tests
+
         run: |
-          python -m pytest
+          python -m pytest -v --tb=short
+
+
+      # ------------------------------------------------------
+      # 5. 安装 Node.js 22
+      # ------------------------------------------------------
 
       - name: Setup Node.js
+
         uses: actions/setup-node@v4
+
         with:
           node-version: "22"
 
-      - name: Test browser extension
+
+      # ------------------------------------------------------
+      # 6. 浏览器扩展测试
+      # ------------------------------------------------------
+
+      - name: Test Browser Extension
+
         run: |
           node --test tests/test_browser_extension_privacy.cjs
 
-      - name: Check browser extension package
+
+      # ------------------------------------------------------
+      # 7. 检查浏览器扩展打包
+      # ------------------------------------------------------
+      #
+      # --check：
+      #   只检查打包结果，不修改项目文件。
+      #
+      # ------------------------------------------------------
+
+      - name: Check Browser Extension Package
+
         run: |
           python scripts/package-browser-extension.py --check
 
-      - name: Check publication safety
+
+      # ------------------------------------------------------
+      # 8. 检查发布安全性
+      # ------------------------------------------------------
+      #
+      # 检查项目发布内容是否存在不应该公开的内容。
+      #
+      # ------------------------------------------------------
+
+      - name: Check Publication Safety
+
         run: |
           python scripts/check-publication.py
 
+
+
+  # ==========================================================
+  # Job 2：Docker 多架构镜像构建与发布
+  # ==========================================================
+  #
+  # 依赖：
+  #   Job 1：test
+  #
+  # 只有测试全部通过，才会执行本任务。
+  #
+  # ==========================================================
+
   build:
+
     name: Build and Publish GHCR
-    needs: test
+
     runs-on: ubuntu-latest
 
+    # 必须等待测试任务成功
+    needs: test
+
+    # --------------------------------------------------------
+    # 本任务独立权限
+    # --------------------------------------------------------
+
     permissions:
+
+      # 读取仓库源码
       contents: read
+
+      # 允许推送 Docker 镜像到 GHCR
       packages: write
 
     steps:
-      - name: Checkout
+
+
+      # ------------------------------------------------------
+      # 1. 检出源码
+      # ------------------------------------------------------
+
+      - name: Checkout Repository
+
         uses: actions/checkout@v4
 
+
+      # ------------------------------------------------------
+      # 2. 配置 Docker Buildx
+      # ------------------------------------------------------
+      #
+      # Buildx 用于构建多架构 Docker 镜像。
+      #
+      # ------------------------------------------------------
+
       - name: Setup Docker Buildx
+
         uses: docker/setup-buildx-action@v3
 
-      - name: Docker metadata
+
+      # ------------------------------------------------------
+      # 3. 自动生成 Docker 镜像标签
+      # ------------------------------------------------------
+      #
+      # 镜像名称：
+      #   ghcr.io/breeze4515/pdd-cs
+      #
+      # 标签规则：
+      #
+      # main 分支：
+      #   latest
+      #
+      # 其他分支：
+      #   分支名称
+      #
+      # 版本标签：
+      #   v2.2.0
+      #
+      # 提交版本：
+      #   sha-xxxxxxxx
+      #
+      # ------------------------------------------------------
+
+      - name: Docker Metadata
+
         id: meta
+
         uses: docker/metadata-action@v5
+
         with:
+
           images: ghcr.io/breeze4515/pdd-cs
+
           tags: |
+
+            # 默认分支自动生成 latest
             type=raw,value=latest,enable={{is_default_branch}}
+
+            # 分支名称标签
             type=ref,event=branch
+
+            # Git 版本标签
             type=ref,event=tag
+
+            # Git Commit SHA 标签
             type=sha,prefix=sha-
 
-      - name: Login to GHCR
+
+      # ------------------------------------------------------
+      # 4. 登录 GitHub Container Registry
+      # ------------------------------------------------------
+      #
+      # Pull Request 不执行登录。
+      #
+      # GITHUB_TOKEN：
+      #   使用 GitHub Actions 自动提供的令牌。
+      #
+      # 不需要手动创建 Personal Access Token。
+      #
+      # ------------------------------------------------------
+
+      - name: Login to GitHub Container Registry
+
         if: github.event_name != 'pull_request'
+
         uses: docker/login-action@v3
+
         with:
+
           registry: ghcr.io
+
           username: ${{ github.actor }}
+
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and Push
+
+      # ------------------------------------------------------
+      # 5. 构建并推送 Docker 镜像
+      # ------------------------------------------------------
+      #
+      # context：
+      #   使用仓库根目录作为构建上下文。
+      #
+      # file：
+      #   使用根目录 Dockerfile。
+      #
+      # platforms：
+      #   AMD64 + ARM64 双架构。
+      #
+      # push：
+      #   PR 不推送镜像。
+      #   其他事件推送镜像。
+      #
+      # cache-from / cache-to：
+      #   使用 GitHub Actions 缓存加速构建。
+      #
+      # ------------------------------------------------------
+
+      - name: Build and Push Docker Image
+
         uses: docker/build-push-action@v6
+
         with:
+
+          # Docker 构建上下文
           context: .
+
+          # Dockerfile 路径
           file: ./Dockerfile
+
+          # 多架构构建
           platforms: linux/amd64,linux/arm64
+
+          # PR 只构建，不发布
           push: ${{ github.event_name != 'pull_request' }}
+
+          # 自动生成的镜像标签
           tags: ${{ steps.meta.outputs.tags }}
+
+          # 自动生成镜像元数据
           labels: ${{ steps.meta.outputs.labels }}
+
+          # 读取 GitHub Actions 构建缓存
           cache-from: type=gha
+
+          # 保存最大构建缓存
           cache-to: type=gha,mode=max
+
+
+# ============================================================
+# 工作流结束
+# ============================================================
